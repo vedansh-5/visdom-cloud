@@ -421,10 +421,39 @@ class WorkspaceAdmin(ChangeableView, model=Workspace):
     }
 
 
-class MembershipAdmin(RoleScopedView, model=Membership):
+def _other_active_admins(db, membership):
+    """Active admins of the same workspace other than this member.
+
+    Locked while it is read, because the answer is being used to decide whether
+    this member may stop being an admin. Two staff demoting the last two admins
+    at once would otherwise each see the other and both be allowed through,
+    leaving a workspace nobody can administer.
+    """
+    return (
+        db.query(Membership)
+        .filter(
+            Membership.workspace_id == membership.workspace_id,
+            Membership.role == "admin",
+            Membership.status == "active",
+            Membership.user_id != membership.user_id,
+        )
+        .with_for_update()
+        .all()
+    )
+
+
+class MembershipAdmin(ChangeableView, model=Membership):
+    """Who belongs to a workspace, and what they may do there.
+
+    The only place staff can change someone's access without also changing
+    their account. Read as: the workspace keeps working afterwards, which is
+    what the two guards below are for.
+    """
+
     name = "Membership"
     name_plural = "Memberships"
     icon = "fa-solid fa-users"
+    form_columns = [Membership.role]
     column_list = [
         Membership.workspace,
         Membership.user,
@@ -437,6 +466,70 @@ class MembershipAdmin(RoleScopedView, model=Membership):
         Membership.user: lambda m, a: _email_of(m.user),
     }
     column_sortable_list = [Membership.role, Membership.status]
+
+    @property
+    def can_delete(self) -> bool:
+        """Advertised for everyone; refused per request by ``check_can_delete``.
+
+        sqladmin reads this off the class without a request in hand, so it
+        cannot vary by role here. The gate is the per-request check below, which
+        is what makes the hidden button and the typed URL agree.
+        """
+        return True
+
+    async def check_can_delete(self, request: Request, model) -> bool:
+        return roles.can_remove(request.session.get(ROLE_KEY), "Membership")
+
+    async def on_model_change(
+        self, data: dict, model, is_created: bool, request: Request
+    ) -> None:
+        """Apply the field rules, then refuse a change that orphans a workspace.
+
+        The owner's role is fixed, matching what the API already refuses. That
+        rule is what guarantees a workspace always has an admin, so the console
+        cannot be the one place it does not hold.
+        """
+        await super().on_model_change(data, model, is_created, request)
+        new_role = data.get("role")
+        if new_role is None or new_role == model.role or model.role != "admin":
+            return
+
+        db = SessionLocal()
+        try:
+            workspace = (
+                db.query(Workspace).filter(Workspace.id == model.workspace_id).first()
+            )
+            if workspace is not None and workspace.created_by == model.user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="The workspace owner is always an admin.",
+                )
+            if not _other_active_admins(db, model):
+                raise HTTPException(
+                    status_code=400,
+                    detail="This is the workspace's last admin.",
+                )
+        finally:
+            db.close()
+
+    async def on_model_delete(self, model, request: Request) -> None:
+        """Refuse a removal that would leave a workspace with no admin.
+
+        The same rule the API applies when a member removes another. A console
+        that could do what the product refuses would be a way around the rule
+        rather than a way to administer it.
+        """
+        if model.role != "admin" or model.status != "active":
+            return
+        db = SessionLocal()
+        try:
+            if not _other_active_admins(db, model):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot remove the last admin of a workspace.",
+                )
+        finally:
+            db.close()
 
 
 class APIKeyAdmin(ChangeableView, model=APIKey):

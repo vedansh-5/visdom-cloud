@@ -47,8 +47,17 @@ _VISIBLE = {
 # Anything that decides what someone is entitled to stays with a superadmin.
 _CHANGEABLE = {
     VIEWER: set(),
-    SUPPORT: {"APIKey", "User", "Workspace"},
-    SUPERADMIN: {"APIKey", "User", "Workspace"},
+    SUPPORT: {"APIKey", "User", "Workspace", "Membership"},
+    SUPERADMIN: {"APIKey", "User", "Workspace", "Membership"},
+}
+
+# Removing a row is narrower again. Support can change what someone is allowed
+# to do; taking their access away entirely, and the record of it with them,
+# stays with a superadmin.
+_REMOVABLE = {
+    VIEWER: set(),
+    SUPPORT: set(),
+    SUPERADMIN: {"Membership"},
 }
 
 # What each role may set, within a model it can change at all. Restricting the
@@ -62,11 +71,13 @@ _EDITABLE_FIELDS = {
         "APIKey": {"is_active"},
         "User": {"is_active"},
         "Workspace": {"is_active"},
+        "Membership": {"role"},
     },
     SUPERADMIN: {
         "APIKey": {"is_active"},
         "User": {"is_active", "tier"},
         "Workspace": {"is_active", "trashed_at"},
+        "Membership": {"role"},
     },
 }
 
@@ -82,6 +93,11 @@ def can_change(role, model_name):
 def editable_fields(role, model_name):
     """The fields this role may set on this model, empty when it may not."""
     return _EDITABLE_FIELDS.get(role, {}).get(model_name, set())
+
+
+def can_remove(role, model_name):
+    """Whether this role may delete a row of this model outright."""
+    return model_name in _REMOVABLE.get(role, set())
 
 
 def is_valid(role):
