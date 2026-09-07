@@ -147,6 +147,18 @@ server {
         access_log off;
     }
 
+    # Names every workspace on the instance, exactly like _activity.
+    # Prometheus reaches it directly over the internal network.
+    location = /vis/_metrics {
+        deny all;
+        access_log off;
+    }
+
+    location ~ ^/vis/w/[^/]+/_metrics {
+        deny all;
+        access_log off;
+    }
+
     location ~ ^/vis/w/(?<ws_slug>[^/]+)/(?<vis_rest>.*)$ {
         auth_request /_auth_verify;
         error_page 401 = @auth_redirect;

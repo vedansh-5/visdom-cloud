@@ -164,3 +164,55 @@ def test_the_audit_trail_still_renders_once_the_row_is_gone(admin_client):
     trail = admin_client.get("/admin/admin-action/list", follow_redirects=False)
     assert trail.status_code == 200
     assert "long-gone (purged)" in trail.text
+
+
+def test_the_workspace_page_reports_the_work_a_workspace_caused(admin_client, monkeypatch):
+    """The counters come from the instances, so the page is asked with a known
+    answer rather than a live deployment."""
+    from app.admin import activity
+
+    workspace = Workspace(id=uuid.uuid4(), name="Busy", slug="busy-one")
+    admin_client.staff_db.add(workspace)
+    admin_client.staff_db.commit()
+
+    monkeypatch.setattr(
+        activity,
+        "cached_activity",
+        lambda: {
+            str(workspace.id): {
+                "viewers": 1,
+                "writers": 0,
+                "writes": 12,
+                "broadcasts": 30,
+                "broadcast_bytes": 4096,
+            }
+        },
+    )
+
+    detail = admin_client.get(
+        f"/admin/workspace/details/{workspace.id}", follow_redirects=False
+    )
+    assert detail.status_code == 200
+    assert "12 writes" in detail.text
+    assert "30 pushes" in detail.text
+    assert "4.0 KB" in detail.text
+
+
+def test_a_workspace_whose_instance_reports_no_counters_says_so(admin_client, monkeypatch):
+    """A visdom without the counters should read as unknown rather than as a
+    workspace that has done nothing."""
+    from app.admin import activity
+
+    workspace = Workspace(id=uuid.uuid4(), name="Quiet", slug="quiet-one")
+    admin_client.staff_db.add(workspace)
+    admin_client.staff_db.commit()
+
+    monkeypatch.setattr(
+        activity, "cached_activity", lambda: {str(workspace.id): {"viewers": 0}}
+    )
+
+    detail = admin_client.get(
+        f"/admin/workspace/details/{workspace.id}", follow_redirects=False
+    )
+    assert detail.status_code == 200
+    assert "not reported" in detail.text

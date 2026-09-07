@@ -78,17 +78,26 @@ def _combine(merged: dict[str, dict], workspace_id: str, entry: dict) -> None:
     zeroes reported by the instances that merely see the files.
 
     Counts add up, since a workspace is served by one instance and the others
-    contribute nothing. Everything else takes the most informative answer: the
-    latest write, the largest size, and a slug from whichever instance has
-    actually bound the workspace and knows it.
+    contribute nothing. That holds for the running totals as well as the live
+    counts: a workspace moves between instances when one restarts, and the work
+    each did is a share of the same total rather than a rival answer to it.
+    Everything else takes the most informative answer: the latest write, the
+    largest size, and a slug from whichever instance has actually bound the
+    workspace and knows it.
+
+    A counter absent from every instance stays absent, so a deployment running a
+    visdom that predates them reports nothing rather than a fabricated zero.
     """
     current = merged.get(workspace_id)
     if current is None:
         merged[workspace_id] = dict(entry)
         return
 
-    current["viewers"] = current.get("viewers", 0) + entry.get("viewers", 0)
-    current["writers"] = current.get("writers", 0) + entry.get("writers", 0)
+    for key in ("viewers", "writers", "writes", "broadcasts", "broadcast_bytes"):
+        mine, theirs = current.get(key), entry.get(key)
+        if mine is None and theirs is None:
+            continue
+        current[key] = (mine or 0) + (theirs or 0)
     current["slug"] = current.get("slug") or entry.get("slug")
     for key in ("last_active_at", "bytes"):
         mine, theirs = current.get(key), entry.get(key)

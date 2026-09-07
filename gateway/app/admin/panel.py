@@ -310,12 +310,42 @@ def _workspace_size(model, name):
     size = entry.get("bytes") if entry else None
     if size is None:
         return "unknown"
+    return _human_bytes(size)
+
+
+def _human_bytes(size):
+    """A byte count in the largest unit that leaves a number worth reading."""
     if size < 1024:
         return f"{size} B"
     for unit in ("KB", "MB", "GB"):
         size /= 1024.0
         if size < 1024 or unit == "GB":
             return f"{size:.1f} {unit}"
+
+
+def _workspace_traffic(model, name):
+    """How much work this workspace has caused since the instances came up.
+
+    Counted inside visdom against the workspace that caused it, because one
+    process serves many and its own CPU cannot be divided between them
+    afterwards. Writes are environments saved; pushes are messages sent to
+    viewers, counted once per viewer reached.
+
+    Said to be since the instances started because that is what it is. The
+    counters live in memory and begin again at zero on restart, and a number
+    that looks like a lifetime total but silently is not would be worse than no
+    number.
+    """
+    entry = activity.cached_activity().get(str(model.id)) or {}
+    writes = entry.get("writes")
+    pushes = entry.get("broadcasts")
+    if writes is None and pushes is None:
+        return "not reported"
+    sent = entry.get("broadcast_bytes") or 0
+    return (
+        f"{writes or 0} writes, {pushes or 0} pushes"
+        f" ({_human_bytes(sent)}) since the instances started"
+    )
 
 
 def _workspace_created(model, name):
@@ -389,6 +419,7 @@ class WorkspaceAdmin(ChangeableView, model=Workspace):
         "standing",
         "activity",
         "last_active",
+        "traffic",
         "size",
         "members",
         "invites",
@@ -401,6 +432,7 @@ class WorkspaceAdmin(ChangeableView, model=Workspace):
         "standing": "Standing",
         "activity": "Active now",
         "last_active": "Last write",
+        "traffic": "Work done",
         "size": "On disk",
         "members": "Members",
         "invites": "Pending email invites",
@@ -413,6 +445,7 @@ class WorkspaceAdmin(ChangeableView, model=Workspace):
         "standing": _workspace_standing,
         "activity": _workspace_activity,
         "last_active": _workspace_last_active,
+        "traffic": _workspace_traffic,
         "size": _workspace_size,
         "members": _member_lines,
         "invites": _invite_lines,
