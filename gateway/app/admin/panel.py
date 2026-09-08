@@ -207,10 +207,11 @@ def _workspace_activity(model, name):
 
 def _workspace_last_active(model, name):
     """Render how long ago the workspace was last written to."""
-    entry = activity.cached_activity().get(str(model.id))
+    snapshot = activity.cached_snapshot()
+    entry = snapshot["workspaces"].get(str(model.id))
     last = entry.get("last_active_at") if entry else None
     if not last:
-        return "unknown"
+        return "never" if snapshot["answered"] else "unknown"
     seconds = max(0, int(time.time() - last))
     if seconds < 60:
         return "just now"
@@ -306,10 +307,11 @@ def _workspace_size(model, name):
     without doing anything obviously wrong, and this is the only place that
     would show it before the disk filled.
     """
-    entry = activity.cached_activity().get(str(model.id))
+    snapshot = activity.cached_snapshot()
+    entry = snapshot["workspaces"].get(str(model.id))
     size = entry.get("bytes") if entry else None
     if size is None:
-        return "unknown"
+        return "nothing yet" if snapshot["answered"] else "unknown"
     return _human_bytes(size)
 
 
@@ -349,8 +351,14 @@ def _workspace_traffic(model, name):
 
 
 def _workspace_created(model, name):
-    """Workspaces created before the created_at column existed have no true age."""
-    return model.created_at.strftime("%Y-%m-%d %H:%M") if model.created_at else "unknown"
+    """Workspaces created before the created_at column existed have no true age.
+
+    The column was added nullable and never backfilled, because there was no
+    honest source to backfill it from. Saying so beats inventing a date.
+    """
+    if model.created_at is None:
+        return "before this was recorded"
+    return model.created_at.strftime("%Y-%m-%d %H:%M")
 
 
 def _days_since(moment):
