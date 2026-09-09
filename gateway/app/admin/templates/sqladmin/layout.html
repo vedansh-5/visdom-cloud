@@ -1,101 +1,556 @@
 {% extends "sqladmin/base.html" %}
-{% from 'sqladmin/_macros.html' import display_menu %}
+
+{% macro nav_row(menu, request) %}
+<a class="ap-nav-row {% if menu.is_active(request) %}is-active{% endif %}" href="{{ menu.url(request) }}">
+  {% if menu.icon %}<i class="{{ menu.icon }} ap-nav-icon"></i>{% endif %}
+  <span>{{ menu.display_name }}</span>
+</a>
+{% endmacro %}
+
+{% macro nav_group(menu, request) %}
+{% set shown = [] %}
+{% for child in menu.children %}
+{% if child.is_visible(request) and child.is_accessible(request) %}
+{% set _ = shown.append(child) %}
+{% endif %}
+{% endfor %}
+{% if shown %}
+<div class="ap-nav-group">
+  <div class="ap-nav-label">{{ menu.name }}</div>
+  {% for child in shown %}
+  {{ nav_row(child, request) }}
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% block head_tail %}
+<style>
+  :root {
+    --ap-blue: #2f6ef0;
+    --ap-blue-bright: #4d8bf5;
+    --ap-blue-soft: rgba(47, 110, 240, .1);
+    --ap-chrome: #1d273b;
+    --ap-side: #1a2332;
+    --ap-on-dark: rgba(255, 255, 255, .58);
+    --ap-bg: #f5f6f8;
+    --ap-surface: #ffffff;
+    --ap-ink: #1d1d1f;
+    --ap-ink-soft: #6e7481;
+    --ap-hairline: rgba(0, 0, 0, .07);
+    --ap-radius: 14px;
+    --ap-radius-sm: 10px;
+    --ap-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 6px 20px rgba(16, 24, 40, .05);
+    --ap-ease: cubic-bezier(.25, .1, .25, 1);
+    --ap-side-width: 232px;
+    --ap-chrome-height: 52px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    background: var(--ap-bg);
+    color: var(--ap-ink);
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -.006em;
+  }
+
+  .ap-chrome {
+    background: var(--ap-chrome);
+    color: #fff;
+    height: var(--ap-chrome-height);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 20px;
+    position: sticky;
+    top: 0;
+    z-index: 1030;
+  }
+
+  .ap-chrome.is-danger {
+    background: #a4262c;
+  }
+
+  .ap-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    text-decoration: none;
+    letter-spacing: -.01em;
+    white-space: nowrap;
+    width: calc(var(--ap-side-width) - 20px);
+  }
+
+  .ap-brand:hover {
+    color: #fff;
+    text-decoration: none;
+  }
+
+  .ap-brand-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    flex: none;
+  }
+
+  .ap-env {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 980px;
+    background: rgba(255, 255, 255, .14);
+    color: #fff;
+    flex: none;
+  }
+
+  .ap-context {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .ap-context-name {
+    font-size: 13px;
+    color: var(--ap-on-dark);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 320px;
+  }
+
+  .ap-context-name strong {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .ap-chrome-end {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+  }
+
+  .ap-who {
+    font-size: 13px;
+    color: var(--ap-on-dark);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .ap-role {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 980px;
+    background: rgba(255, 255, 255, .14);
+    color: #fff;
+  }
+
+  .ap-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 980px;
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    background: rgba(255, 255, 255, .14);
+    color: #fff;
+    transition: background .2s var(--ap-ease), transform .2s var(--ap-ease);
+  }
+
+  .ap-chip:hover {
+    background: rgba(255, 255, 255, .24);
+    color: #fff;
+    text-decoration: none;
+    transform: scale(1.02);
+  }
+
+  .ap-chip.is-primary {
+    background: var(--ap-blue);
+  }
+
+  .ap-chip.is-primary:hover {
+    background: var(--ap-blue-bright);
+  }
+
+  .ap-chip.is-danger {
+    background: rgba(255, 255, 255, .12);
+    color: #ffb4b4;
+  }
+
+  .ap-chip.is-danger:hover {
+    background: #a4262c;
+    color: #fff;
+  }
+
+  .ap-shell {
+    display: flex;
+    align-items: flex-start;
+    min-height: calc(100vh - var(--ap-chrome-height));
+  }
+
+  .ap-side {
+    width: var(--ap-side-width);
+    flex: none;
+    align-self: stretch;
+    background: var(--ap-side);
+    padding: 18px 12px 40px;
+    position: sticky;
+    top: var(--ap-chrome-height);
+    max-height: calc(100vh - var(--ap-chrome-height));
+    overflow-y: auto;
+  }
+
+  .ap-nav-group {
+    margin-bottom: 22px;
+  }
+
+  .ap-nav-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, .38);
+    padding: 0 12px;
+    margin-bottom: 6px;
+  }
+
+  .ap-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 36px;
+    padding: 0 12px;
+    margin-bottom: 2px;
+    border-radius: var(--ap-radius-sm);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ap-on-dark);
+    text-decoration: none;
+    transition: background .2s var(--ap-ease), color .2s var(--ap-ease);
+  }
+
+  .ap-nav-row:hover {
+    background: rgba(255, 255, 255, .07);
+    color: #fff;
+    text-decoration: none;
+  }
+
+  .ap-nav-row.is-active {
+    background: var(--ap-blue);
+    color: #fff;
+  }
+
+  .ap-nav-row.is-active .ap-nav-icon {
+    opacity: 1;
+  }
+
+  .ap-nav-icon {
+    width: 16px;
+    text-align: center;
+    font-size: 13px;
+    opacity: .6;
+    flex: none;
+  }
+
+  .ap-main {
+    flex: 1;
+    min-width: 0;
+    padding: 32px 28px 96px;
+  }
+
+  .ap-page-title {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -.021em;
+    margin: 0;
+  }
+
+  .ap-page-subtitle {
+    font-size: 14px;
+    color: var(--ap-ink-soft);
+    margin-top: 4px;
+  }
+
+  .ap-page-header {
+    margin-bottom: 24px;
+  }
+
+  .ap-menu {
+    border: 1px solid var(--ap-hairline);
+    border-radius: var(--ap-radius-sm);
+    box-shadow: var(--ap-shadow);
+    padding: 6px;
+    margin-top: 6px;
+    min-width: 200px;
+  }
+
+  .ap-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 14px;
+    color: var(--ap-ink);
+  }
+
+  .ap-menu-item:hover {
+    background: rgba(0, 0, 0, .04);
+  }
+
+  .ap-menu-icon {
+    width: 16px;
+    text-align: center;
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  .card {
+    background: var(--ap-surface);
+    border: 1px solid var(--ap-hairline);
+    border-radius: var(--ap-radius);
+    box-shadow: var(--ap-shadow);
+  }
+
+  .card-header {
+    border-bottom: 1px solid var(--ap-hairline);
+    padding: 16px 20px;
+    min-height: 0;
+  }
+
+  .card-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    margin: 0;
+  }
+
+  .table {
+    --tblr-table-color: var(--ap-ink);
+    font-size: 14px;
+  }
+
+  .table thead th {
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: none;
+    color: var(--ap-ink-soft);
+    border-bottom: 1px solid var(--ap-hairline);
+    padding: 12px 16px;
+  }
+
+  .table tbody td {
+    padding: 14px 16px;
+    border-top: 1px solid var(--ap-hairline);
+    vertical-align: middle;
+  }
+
+  .table tbody tr:hover {
+    background: rgba(0, 0, 0, .015);
+  }
+
+  .btn {
+    border-radius: 980px;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px 18px;
+    transition: all .2s var(--ap-ease);
+  }
+
+  .btn:hover {
+    transform: scale(1.02);
+  }
+
+  .btn-primary {
+    background: var(--ap-blue);
+    border-color: var(--ap-blue);
+  }
+
+  .btn-primary:hover {
+    background: var(--ap-blue-bright);
+    border-color: var(--ap-blue-bright);
+  }
+
+  .form-control,
+  .form-select {
+    border-radius: var(--ap-radius-sm);
+    border-color: var(--ap-hairline);
+    font-size: 14px;
+    padding: 9px 13px;
+  }
+
+  .form-control:focus,
+  .form-select:focus {
+    border-color: var(--ap-blue);
+    box-shadow: 0 0 0 3px var(--ap-blue-soft);
+  }
+
+  a {
+    color: var(--ap-blue);
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+
+  .pagination .page-link {
+    border: 0;
+    border-radius: 8px;
+    color: var(--ap-ink-soft);
+    font-size: 14px;
+  }
+
+  .pagination .page-item.active .page-link {
+    background: var(--ap-blue);
+    color: #fff;
+  }
+
+  @media (max-width: 992px) {
+    .ap-shell {
+      flex-direction: column;
+    }
+
+    .ap-side {
+      width: 100%;
+      position: static;
+      max-height: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 12px 16px;
+    }
+
+    .ap-nav-group {
+      margin-bottom: 0;
+    }
+
+    .ap-main {
+      width: 100%;
+      padding: 24px 16px 64px;
+    }
+
+    .ap-brand {
+      width: auto;
+    }
+
+    .ap-who,
+    .ap-context-name {
+      display: none;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block body %}
-<div class="wrapper">
-  <aside class="navbar navbar-expand-lg navbar-vertical navbar-expand-md navbar-dark" data-bs-theme="dark">
-    <div class="container-fluid">
-      <h1 class="navbar-brand navbar-brand-autodark">
-        <a href="{{ url_for('admin:index') }}">
-          {% if admin.logo_url %}
-          <img src="{{ admin.logo_url }}" width="{{ admin.logo_width }}" height="{{ admin.logo_height }}" alt="{{ admin.title }}" class="navbar-brand-logo" />
-          {% else %}
-          <h3>{{ admin.title }}</h3>
-          {% endif %}
-        </a>
-      </h1>
-      <nav class="navbar navbar-expand-sm shadow-none" id="navbar-menu"
-        data-sqladmin-menu="{{ admin.base_url }}">
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
-          aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
-          <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarSupportedContent">
-          {{ display_menu(admin._menu, request) }}
-        </div>
-      </nav>
-      {% if admin.authentication_backend %}
-      <a href="{{ request.url_for('admin:logout') }}" class="btn btn-secondary btn-icon m-2 px-2">
-        <span class="me-2">{{ _("Logout") }}</span>
-        <i class="fa fa-sign-out"></i>
-      </a>
-      {% endif %}
-    </div>
-  </aside>
-  <div class="page-wrapper">
-    {% block topbar %}
-    {% set env = admin_environment() %}
-    {% set who = admin_identity(request) %}
-    {% set show_switcher = i18n_config.language_switcher and i18n_config.language_switcher | length > 1 %}
-    <header class="navbar navbar-expand-md d-print-none sticky-top shadow-sm{% if env.danger %} bg-danger{% else %} bg-dark{% endif %}" data-bs-theme="dark">
-      <div class="container-fluid">
-        {% if env.name %}
-        <span class="navbar-text fw-bold text-uppercase text-white me-3" style="letter-spacing:.08em;">
-          <i class="fa fa-server me-2"></i>{{ env.name }}
-        </span>
-        {% endif %}
-        <div class="navbar-nav flex-row ms-auto align-items-center gap-3" id="topbar-end">
-          {% if who.email %}
-          <span class="navbar-text text-white-50 small">
-            {{ who.email }}
-            <span class="badge bg-secondary ms-1">{{ who.role }}</span>
-          </span>
-          {% endif %}
-          {% if show_switcher %}
-          <div class="nav-item dropdown">
-            <a href="#" class="btn btn-outline-light dropdown-toggle d-flex align-items-center px-3"
-              data-bs-toggle="dropdown" aria-expanded="false" title="{{ _('Language') }}">
-              <i class="fa fa-language me-2"></i>
-              <span>{{ get_locale_display_name(get_locale()) }}</span>
-            </a>
-            <div class="dropdown-menu dropdown-menu-end">
-              {% for code in i18n_config.language_switcher %}
-              <a class="dropdown-item {% if code == get_locale() %}active{% endif %}"
-                href="{{ request.url.include_query_params(lang=code) }}">
-                {{ get_locale_display_name(code) }}
-              </a>
-              {% endfor %}
-            </div>
-          </div>
-          {% endif %}
-        </div>
-      </div>
-    </header>
-    {% endblock %}
-    <div class="container-fluid">
-      <div class="page-header d-print-none">
-        {% block content_header %}
-        <div class="row align-items-center">
-          <div class="col">
-            <h2 class="page-title">{{ title }}</h2>
-            <div class="page-pretitle">{{ subtitle }}</div>
-          </div>
-        </div>
-        {% endblock %}
-      </div>
-    </div>
-    <div class="page-body flex-grow-1">
-      <div class="container-fluid">
-        <div class="row row-deck row-cards">
-          {% block content %} {% endblock %}
-          {% block flash %}
-          {% include 'sqladmin/flash.html' %}
-          {% endblock %}
-          {% block secret_modal %}
-          {% include 'sqladmin/secret_modal.html' %}
-          {% endblock %}
-        </div>
-      </div>
-    </div>
+{% block topbar %}
+{% set env = admin_environment() %}
+{% set who = admin_identity(request) %}
+{% set creatables = admin_creatables(request) %}
+{% set show_switcher = i18n_config.language_switcher and i18n_config.language_switcher | length > 1 %}
+<header class="ap-chrome{% if env.danger %} is-danger{% endif %}">
+  <a class="ap-brand" href="{{ url_for('admin:index') }}">
+    {% if admin.favicon_url %}<img class="ap-brand-mark" src="{{ admin.favicon_url }}" alt="">{% endif %}
+    <span>{{ admin.title }}</span>
+  </a>
+  {% if env.name %}<span class="ap-env">{{ env.name }}</span>{% endif %}
+  <div class="ap-context">
+    {% block context_actions %}{% endblock %}
   </div>
+  <div class="ap-chrome-end">
+    {% if creatables %}
+    <div class="dropdown">
+      <a href="#" class="ap-chip is-primary dropdown-toggle" data-bs-toggle="dropdown" role="button"
+        aria-expanded="false">
+        <i class="fa fa-plus"></i><span>New</span>
+      </a>
+      <div class="dropdown-menu dropdown-menu-end ap-menu">
+        {% for item in creatables %}
+        <a class="dropdown-item ap-menu-item" href="{{ item.url }}">
+          {% if item.icon %}<i class="{{ item.icon }} ap-menu-icon"></i>{% endif %}
+          <span>{{ item.label }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if show_switcher %}
+    <div class="dropdown">
+      <a href="#" class="ap-chip dropdown-toggle" data-bs-toggle="dropdown" role="button" aria-expanded="false"
+        title="{{ _('Language') }}">
+        <i class="fa fa-language"></i><span>{{ get_locale_display_name(get_locale()) }}</span>
+      </a>
+      <div class="dropdown-menu dropdown-menu-end ap-menu">
+        {% for code in i18n_config.language_switcher %}
+        <a class="dropdown-item ap-menu-item" href="{{ request.url.include_query_params(lang=code) }}">
+          {{ get_locale_display_name(code) }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if who.email %}
+    <span class="ap-who">
+      <span>{{ who.email }}</span>
+      <span class="ap-role">{{ who.role }}</span>
+    </span>
+    {% endif %}
+    {% if admin.authentication_backend %}
+    <a href="{{ request.url_for('admin:logout') }}" class="ap-chip" title="{{ _('Logout') }}">
+      <i class="fa fa-sign-out"></i><span>{{ _("Logout") }}</span>
+    </a>
+    {% endif %}
+  </div>
+</header>
+{% endblock %}
+
+<div class="ap-shell">
+  <aside class="ap-side">
+    <div class="ap-nav-group">
+      <a class="ap-nav-row {% if request.url.path.rstrip('/') == admin.base_url.rstrip('/') %}is-active{% endif %}"
+        href="{{ url_for('admin:index') }}">
+        <i class="fa-solid fa-gauge ap-nav-icon"></i><span>Overview</span>
+      </a>
+    </div>
+    {% for item in admin._menu.items %}
+    {% if item.type_ == "Category" %}
+    {{ nav_group(item, request) }}
+    {% elif item.is_visible(request) and item.is_accessible(request) %}
+    <div class="ap-nav-group">{{ nav_row(item, request) }}</div>
+    {% endif %}
+    {% endfor %}
+  </aside>
+
+  <main class="ap-main">
+    <div class="ap-page-header">
+      {% block content_header %}
+      <h1 class="ap-page-title">{{ title }}</h1>
+      {% if subtitle %}<div class="ap-page-subtitle">{{ subtitle }}</div>{% endif %}
+      {% endblock %}
+    </div>
+    <div class="row">
+      {% block content %}{% endblock %}
+      {% block flash %}
+      {% include 'sqladmin/flash.html' %}
+      {% endblock %}
+      {% block secret_modal %}
+      {% include 'sqladmin/secret_modal.html' %}
+      {% endblock %}
+    </div>
+  </main>
 </div>
 {% endblock %}

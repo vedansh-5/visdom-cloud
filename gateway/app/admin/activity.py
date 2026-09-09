@@ -38,23 +38,30 @@ def instance_addresses() -> list[str]:
     return _SERVER_PATTERN.findall(settings.VISDOM_SERVERS or "")
 
 
-def _ask(address: str, timeout: float) -> list[dict]:
+def _ask(address: str, timeout: float) -> tuple[bool, list[dict]]:
+    """One instance's answer, and whether it gave one at all.
+
+    The two are separate because an instance that answers with nothing about a
+    workspace is saying the workspace has never been written to, while an
+    instance that does not answer is saying nothing at all. A page that cannot
+    tell those apart has to call both of them unknown.
+    """
     url = f"http://{address}/vis/_activity"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             payload = json.loads(response.read() or b"{}")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         logging.warning("could not read activity from %s: %s", address, exc)
-        return []
-    return payload.get("workspaces", [])
+        return False, []
+    return True, payload.get("workspaces", [])
 
 
 _CACHE_TTL = 2.0
-_cache: dict = {"at": 0.0, "value": {}}
+_cache: dict = {"at": 0.0, "value": {"answered": False, "workspaces": {}}}
 
 
-def cached_activity() -> dict[str, dict]:
-    """`activity_by_workspace` behind a short cache.
+def cached_snapshot() -> dict:
+    """`activity_snapshot` behind a short cache.
 
     One list page renders many rows and each wants the same answer, so without
     this a fifty row page would fan out fifty times. The window is short enough
@@ -63,10 +70,15 @@ def cached_activity() -> dict[str, dict]:
     now = time.monotonic()
     if now - _cache["at"] < _CACHE_TTL:
         return _cache["value"]
-    value = activity_by_workspace()
+    value = activity_snapshot()
     _cache["at"] = now
     _cache["value"] = value
     return value
+
+
+def cached_activity() -> dict[str, dict]:
+    """Just the per-workspace part of the cached snapshot."""
+    return cached_snapshot()["workspaces"]
 
 
 def _combine(merged: dict[str, dict], workspace_id: str, entry: dict) -> None:
@@ -105,23 +117,34 @@ def _combine(merged: dict[str, dict], workspace_id: str, entry: dict) -> None:
             current[key] = theirs
 
 
-def activity_by_workspace(timeout: float | None = None) -> dict[str, dict]:
-    """Live viewer/writer counts keyed by workspace id, across all instances.
+def activity_snapshot(timeout: float | None = None) -> dict:
+    """What the instances collectively know, and whether any of them answered.
 
     An instance that does not answer is skipped rather than failing the whole
     call, so one sick instance costs its workspaces' counts instead of the page.
+    `answered` is true once any instance has replied, which is what lets a
+    caller read a missing workspace as one nobody has written to. Every instance
+    shares the env volume, so any one of them reports every workspace that has a
+    directory, and a workspace missing from an answer really has none.
     """
     addresses = instance_addresses()
     if not addresses:
-        return {}
+        return {"answered": False, "workspaces": {}}
     if timeout is None:
         timeout = settings.VISDOM_ACTIVITY_TIMEOUT
 
+    answered = False
     merged: dict[str, dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(addresses)) as pool:
-        for entries in pool.map(lambda a: _ask(a, timeout), addresses):
+        for ok, entries in pool.map(lambda a: _ask(a, timeout), addresses):
+            answered = answered or ok
             for entry in entries:
                 workspace_id = entry.get("workspace_id")
                 if workspace_id:
                     _combine(merged, workspace_id, entry)
-    return merged
+    return {"answered": answered, "workspaces": merged}
+
+
+def activity_by_workspace(timeout: float | None = None) -> dict[str, dict]:
+    """Live viewer/writer counts keyed by workspace id, across all instances."""
+    return activity_snapshot(timeout)["workspaces"]

@@ -6,6 +6,7 @@
 
 """The staff admin panel, mounted on its own route with its own login."""
 
+import base64
 import logging
 import os
 import time
@@ -93,6 +94,7 @@ class StaffAuth(AuthenticationBackend):
                 request.session.clear()
                 return RedirectResponse(request.url_for("admin:login"), status_code=302)
             request.session[ROLE_KEY] = admin.role
+            request.session[EMAIL_KEY] = admin.email
         finally:
             db.close()
         return True
@@ -101,6 +103,7 @@ class StaffAuth(AuthenticationBackend):
 class RoleScopedView(ModelView):
     """A view that hides itself from roles not allowed to see the model."""
 
+    details_template = "sqladmin/record_details.html"
     can_create = False
     can_edit = False
     can_delete = False
@@ -162,6 +165,8 @@ class UserAdmin(ChangeableView, model=User):
     name = "User"
     name_plural = "Users"
     icon = "fa-solid fa-user"
+    category = "People"
+    category_icon = "fa-solid fa-users"
     column_list = [
         User.email,
         User.username,
@@ -207,10 +212,11 @@ def _workspace_activity(model, name):
 
 def _workspace_last_active(model, name):
     """Render how long ago the workspace was last written to."""
-    entry = activity.cached_activity().get(str(model.id))
+    snapshot = activity.cached_snapshot()
+    entry = snapshot["workspaces"].get(str(model.id))
     last = entry.get("last_active_at") if entry else None
     if not last:
-        return "unknown"
+        return "never" if snapshot["answered"] else "unknown"
     seconds = max(0, int(time.time() - last))
     if seconds < 60:
         return "just now"
@@ -306,10 +312,11 @@ def _workspace_size(model, name):
     without doing anything obviously wrong, and this is the only place that
     would show it before the disk filled.
     """
-    entry = activity.cached_activity().get(str(model.id))
+    snapshot = activity.cached_snapshot()
+    entry = snapshot["workspaces"].get(str(model.id))
     size = entry.get("bytes") if entry else None
     if size is None:
-        return "unknown"
+        return "nothing yet" if snapshot["answered"] else "unknown"
     return _human_bytes(size)
 
 
@@ -349,8 +356,14 @@ def _workspace_traffic(model, name):
 
 
 def _workspace_created(model, name):
-    """Workspaces created before the created_at column existed have no true age."""
-    return model.created_at.strftime("%Y-%m-%d %H:%M") if model.created_at else "unknown"
+    """Workspaces created before the created_at column existed have no true age.
+
+    The column was added nullable and never backfilled, because there was no
+    honest source to backfill it from. Saying so beats inventing a date.
+    """
+    if model.created_at is None:
+        return "before this was recorded"
+    return model.created_at.strftime("%Y-%m-%d %H:%M")
 
 
 def _days_since(moment):
@@ -381,6 +394,8 @@ class WorkspaceAdmin(ChangeableView, model=Workspace):
     name = "Workspace"
     name_plural = "Workspaces"
     icon = "fa-solid fa-folder"
+    category = "Workspaces"
+    category_icon = "fa-solid fa-folder"
     column_list = [
         Workspace.name,
         Workspace.slug,
@@ -486,6 +501,8 @@ class MembershipAdmin(ChangeableView, model=Membership):
     name = "Membership"
     name_plural = "Memberships"
     icon = "fa-solid fa-users"
+    category = "Workspaces"
+    category_icon = "fa-solid fa-folder"
     form_columns = [Membership.role]
     column_list = [
         Membership.workspace,
@@ -569,6 +586,8 @@ class APIKeyAdmin(ChangeableView, model=APIKey):
     name = "API key"
     name_plural = "API keys"
     icon = "fa-solid fa-key"
+    category = "Access"
+    category_icon = "fa-solid fa-key"
     column_list = [
         APIKey.name,
         APIKey.prefix,
@@ -589,6 +608,8 @@ class WorkspaceInviteAdmin(RoleScopedView, model=WorkspaceInvite):
     name = "Invite"
     name_plural = "Invites"
     icon = "fa-solid fa-envelope"
+    category = "Access"
+    category_icon = "fa-solid fa-key"
     column_list = [
         WorkspaceInvite.email,
         WorkspaceInvite.workspace,
@@ -604,6 +625,8 @@ class SharedLinkAdmin(RoleScopedView, model=SharedLink):
     name = "Shared link"
     name_plural = "Shared links"
     icon = "fa-solid fa-link"
+    category = "Access"
+    category_icon = "fa-solid fa-key"
     column_list = [
         SharedLink.workspace,
         SharedLink.role,
@@ -619,6 +642,8 @@ class AdminUserAdmin(RoleScopedView, model=AdminUser):
     name = "Staff account"
     name_plural = "Staff accounts"
     icon = "fa-solid fa-user-shield"
+    category = "People"
+    category_icon = "fa-solid fa-users"
     column_list = [
         AdminUser.email,
         AdminUser.role,
@@ -638,6 +663,8 @@ class JanitorView(BaseView):
 
     name = "Cleanup"
     icon = "fa-solid fa-broom"
+    category = "Operations"
+    category_icon = "fa-solid fa-screwdriver-wrench"
     template = "sqladmin/janitor.html"
 
     def is_visible(self, request: Request) -> bool:
@@ -795,6 +822,8 @@ class AdminActionAdmin(RoleScopedView, model=AdminAction):
     name = "Audit trail"
     name_plural = "Audit trail"
     icon = "fa-solid fa-clipboard-list"
+    category = "Operations"
+    category_icon = "fa-solid fa-screwdriver-wrench"
     column_list = [
         AdminAction.created_at,
         AdminAction.admin_email,
@@ -906,6 +935,105 @@ def admin_identity(request):
     }
 
 
+def overview_attention(request):
+    """Cleanup sections that have something in them, for roles allowed to look.
+
+    The cleanup page reads across every workspace at once, so a viewer is not
+    given it. None says the role may not look, which is a different answer from
+    an empty list saying there is nothing to find, and keeps the policy here
+    rather than in the template.
+    """
+    if request.session.get(ROLE_KEY) not in (roles.SUPPORT, roles.SUPERADMIN):
+        return None
+    try:
+        return [section for section in janitor_findings() if section["rows"]]
+    except Exception as exc:
+        logging.warning("overview attention failed: %s", exc)
+        return []
+
+
+_RECORD_LABELS = {
+    "User": lambda row: row.email,
+    "Workspace": lambda row: row.slug,
+    "APIKey": lambda row: f"{row.name} ({_email_of(row.owner)})",
+    "AdminUser": lambda row: row.email,
+    "Membership": lambda row: "%s in %s" % (
+        _email_of(row.user),
+        row.workspace.slug if row.workspace else "?",
+    ),
+    "WorkspaceInvite": lambda row: row.email,
+    "SharedLink": lambda row: row.workspace.slug if row.workspace else "?",
+}
+
+
+def record_label(model_view, model):
+    """What to call the row a detail page is about.
+
+    The topbar says which record its actions would apply to, so the name has to
+    be the one a person would recognise rather than a primary key. A model
+    without an entry falls back to its id, which is worse to read but never
+    wrong.
+    """
+    label = _RECORD_LABELS.get(type(model).__name__)
+    if label is None:
+        return str(getattr(model, "id", ""))
+    try:
+        return label(model)
+    except Exception:
+        return str(getattr(model, "id", ""))
+
+
+def _janitor_url(admin, request):
+    """Where the cleanup page lives, asked of the view rather than guessed.
+
+    sqladmin names a custom view's route after the exposed function, so the
+    name is `view-page` here and would change with the method. Reading it off
+    the registered view keeps that detail out of the templates.
+    """
+    for view in admin._views:
+        if isinstance(view, JanitorView):
+            return request.url_for(f"admin:view-{view.identity}")
+    return None
+
+
+def _creatables(admin, request):
+    """The views this role may add a row to, for the New menu.
+
+    Empty is the normal answer today. Everything the panel shows is created by
+    someone using the product, so the menu stays hidden until something here is
+    genuinely ours to make.
+    """
+    items = []
+    for view in admin._views:
+        if not getattr(view, "is_model", False) or not view.can_create:
+            continue
+        if not view.is_accessible(request) or not view.is_visible(request):
+            continue
+        items.append({
+            "label": view.name,
+            "icon": view.icon,
+            "url": request.url_for("admin:create", identity=view.identity),
+        })
+    return items
+
+
+def _favicon_data_uri():
+    """The visdom mark, inlined so the panel needs no static route for it.
+
+    The console frontend serves the same file, but the panel is reachable
+    without it and should not lose its icon when it is. Under a kilobyte, so
+    inlining costs less than the plumbing would.
+    """
+    path = os.path.join(os.path.dirname(__file__), "static", "favicon.svg")
+    try:
+        with open(path, "rb") as handle:
+            encoded = base64.b64encode(handle.read()).decode("ascii")
+    except OSError as exc:
+        logging.warning("admin favicon missing: %s", exc)
+        return ""
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
 def mount_admin(app, secret_key, base_url="/admin"):
     """Attach the admin panel to a FastAPI app."""
     admin = Admin(
@@ -913,6 +1041,7 @@ def mount_admin(app, secret_key, base_url="/admin"):
         engine=engine,
         base_url=base_url,
         title="Visdom Dev staff",
+        favicon_url=_favicon_data_uri(),
         templates_dir=os.path.join(os.path.dirname(__file__), "templates"),
         authentication_backend=StaffAuth(secret_key=secret_key),
         audit_backend=StaffAuditBackend(SessionLocal, SESSION_KEY, EMAIL_KEY),
@@ -922,6 +1051,14 @@ def mount_admin(app, secret_key, base_url="/admin"):
     admin.templates.env.globals["admin_identity"] = admin_identity
     admin.templates.env.globals["janitor_findings"] = janitor_findings
     admin.templates.env.globals["overview_recent"] = overview_recent
+    admin.templates.env.globals["overview_attention"] = overview_attention
+    admin.templates.env.globals["admin_creatables"] = (
+        lambda request: _creatables(admin, request)
+    )
+    admin.templates.env.globals["janitor_url"] = (
+        lambda request: _janitor_url(admin, request)
+    )
+    admin.templates.env.globals["record_label"] = record_label
     for view in VIEWS:
         admin.add_view(view)
     admin.add_view(JanitorView)

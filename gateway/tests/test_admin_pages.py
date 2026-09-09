@@ -216,3 +216,49 @@ def test_a_workspace_whose_instance_reports_no_counters_says_so(admin_client, mo
     )
     assert detail.status_code == 200
     assert "not reported" in detail.text
+
+
+def test_a_workspace_no_instance_mentions_has_never_been_written_to(
+    admin_client, monkeypatch
+):
+    """Absent from an answer is a real answer.
+
+    Every instance shares the env volume, so one that replies at all reports
+    every workspace that has a directory. A workspace it does not mention has
+    none, which means nobody has ever written to it.
+    """
+    from app.admin import activity
+
+    workspace = Workspace(id=uuid.uuid4(), name="Fresh", slug="fresh-one")
+    admin_client.staff_db.add(workspace)
+    admin_client.staff_db.commit()
+
+    monkeypatch.setattr(
+        activity, "cached_snapshot", lambda: {"answered": True, "workspaces": {}}
+    )
+
+    detail = admin_client.get(
+        f"/admin/workspace/details/{workspace.id}", follow_redirects=False
+    )
+    assert detail.status_code == 200
+    assert "never" in detail.text
+    assert "nothing yet" in detail.text
+
+
+def test_a_workspace_stays_unknown_when_no_instance_answered(admin_client, monkeypatch):
+    """Silence from every instance is not evidence that nothing has happened."""
+    from app.admin import activity
+
+    workspace = Workspace(id=uuid.uuid4(), name="Offline", slug="offline-one")
+    admin_client.staff_db.add(workspace)
+    admin_client.staff_db.commit()
+
+    monkeypatch.setattr(
+        activity, "cached_snapshot", lambda: {"answered": False, "workspaces": {}}
+    )
+
+    detail = admin_client.get(
+        f"/admin/workspace/details/{workspace.id}", follow_redirects=False
+    )
+    assert detail.status_code == 200
+    assert "unknown" in detail.text
