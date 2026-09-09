@@ -262,3 +262,28 @@ def test_a_workspace_stays_unknown_when_no_instance_answered(admin_client, monke
     )
     assert detail.status_code == 200
     assert "unknown" in detail.text
+
+
+def test_suspending_a_workspace_through_the_form_actually_saves(admin_client):
+    """The write path, not just the page it is reached from.
+
+    Every other test here asks for a page and checks it came back, which a
+    broken save survives untouched: the form renders, the POST fails, and the
+    only sign is an error banner nobody automated. sqladmin runs
+    ``on_model_change`` through ``anyio.from_thread``, so a dependency that
+    moves that attribute takes out every edit in the console at once while
+    leaving all ten pages returning 200.
+    """
+    workspace = Workspace(id=uuid.uuid4(), name="Noisy", slug="noisy-one", is_active=True)
+    admin_client.staff_db.add(workspace)
+    admin_client.staff_db.commit()
+
+    saved = admin_client.post(
+        f"/admin/workspace/edit/{workspace.id}",
+        data={"is_active": "false"},
+        follow_redirects=False,
+    )
+    assert saved.status_code in (302, 303), saved.text
+
+    admin_client.staff_db.expire_all()
+    assert admin_client.staff_db.get(Workspace, workspace.id).is_active is False
