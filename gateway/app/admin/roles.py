@@ -48,7 +48,7 @@ _VISIBLE = {
 _CHANGEABLE = {
     VIEWER: set(),
     SUPPORT: {"APIKey", "User", "Workspace", "Membership"},
-    SUPERADMIN: {"APIKey", "User", "Workspace", "Membership"},
+    SUPERADMIN: {"APIKey", "User", "Workspace", "Membership", "AdminUser"},
 }
 
 # Removing a row is narrower again. Support can change what someone is allowed
@@ -88,6 +88,10 @@ _EDITABLE_FIELDS = {
         "User": {"is_active", "tier"},
         "Workspace": {"is_active", "trashed_at"},
         "Membership": {"role"},
+        # Not the role or the email. Changing what a colleague may see is a
+        # different decision from taking their access away, and the second is
+        # the one that has to be possible without a shell on the box.
+        "AdminUser": {"is_active"},
     },
 }
 

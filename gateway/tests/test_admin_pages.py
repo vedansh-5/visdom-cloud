@@ -392,3 +392,78 @@ def test_the_audit_trail_does_not_keep_the_password(admin_client):
     assert rows, "the creation should have been recorded at all"
     for row in rows:
         assert "a-memorable-secret" not in str(row.changes)
+
+
+def test_a_staff_account_can_be_stopped(admin_client):
+    """Removing someone's access should not need a shell on the box either."""
+    from app.models import AdminUser
+
+    admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("leaver@example.com"),
+        follow_redirects=False,
+    )
+    admin_client.staff_db.expire_all()
+    leaver = (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.email == "leaver@example.com")
+        .first()
+    )
+    assert leaver is not None and leaver.is_active
+
+    stopped = admin_client.post(
+        f"/admin/admin-user/edit/{leaver.id}", data={}, follow_redirects=False
+    )
+    assert stopped.status_code in (302, 303), stopped.text
+
+    admin_client.staff_db.expire_all()
+    assert admin_client.staff_db.get(AdminUser, leaver.id).is_active is False
+
+
+def test_the_last_superadmin_cannot_be_stopped(admin_client):
+    """A console that can lock everyone out of itself is recovered with a shell
+    on the box, which is the thing this view exists to avoid."""
+    from app.models import AdminUser
+
+    only = (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.role == "superadmin", AdminUser.is_active.is_(True))
+        .all()
+    )
+    assert len(only) == 1, "the fixture should sign in the only superadmin"
+
+    refused = admin_client.post(
+        f"/admin/admin-user/edit/{only[0].id}", data={}, follow_redirects=False
+    )
+    assert refused.status_code not in (302, 303)
+
+    admin_client.staff_db.expire_all()
+    assert admin_client.staff_db.get(AdminUser, only[0].id).is_active is True
+
+
+def test_editing_a_staff_account_cannot_change_the_role(admin_client):
+    """Changing what a colleague may see is a different decision from taking
+    their access away, and the edit form is only for the second."""
+    from app.models import AdminUser
+
+    admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("viewer-only@example.com", role="viewer"),
+        follow_redirects=False,
+    )
+    admin_client.staff_db.expire_all()
+    account = (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.email == "viewer-only@example.com")
+        .first()
+    )
+    assert account is not None
+
+    admin_client.post(
+        f"/admin/admin-user/edit/{account.id}",
+        data={"is_active": "y", "role": "superadmin"},
+        follow_redirects=False,
+    )
+
+    admin_client.staff_db.expire_all()
+    assert admin_client.staff_db.get(AdminUser, account.id).role == "viewer"

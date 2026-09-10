@@ -642,6 +642,25 @@ class SharedLinkAdmin(RoleScopedView, model=SharedLink):
 MIN_STAFF_PASSWORD = 12
 
 
+def _other_active_superadmins(db, admin):
+    """Superadmins other than this one who can still sign in.
+
+    Locked while it is read, for the same reason the workspace admin check is:
+    two staff stopping the last two superadmins at once would each see the
+    other and both be let through, leaving a console nobody can open.
+    """
+    return (
+        db.query(AdminUser)
+        .filter(
+            AdminUser.role == roles.SUPERADMIN,
+            AdminUser.is_active.is_(True),
+            AdminUser.id != admin.id,
+        )
+        .with_for_update()
+        .all()
+    )
+
+
 class AdminUserAdmin(RoleScopedView, model=AdminUser):
     """Staff accounts, and the one thing in the panel staff may create.
 
@@ -657,6 +676,7 @@ class AdminUserAdmin(RoleScopedView, model=AdminUser):
     category = "People"
     category_icon = "fa-solid fa-users"
     can_create = True
+    can_edit = True
     column_list = [
         AdminUser.email,
         AdminUser.role,
@@ -665,7 +685,14 @@ class AdminUserAdmin(RoleScopedView, model=AdminUser):
         AdminUser.last_login_at,
     ]
     column_details_exclude_list = [AdminUser.password_hash]
-    form_columns = [AdminUser.email, AdminUser.role, AdminUser.password_hash]
+    form_columns = [
+        AdminUser.email,
+        AdminUser.role,
+        AdminUser.password_hash,
+        AdminUser.is_active,
+    ]
+    form_create_rules = ["email", "role", "password_hash"]
+    form_edit_rules = ["is_active"]
     form_overrides = {"role": wtforms.SelectField, "password_hash": wtforms.PasswordField}
     form_args = {
         "email": {"validators": [wtforms.validators.Email()]},
@@ -682,15 +709,19 @@ class AdminUserAdmin(RoleScopedView, model=AdminUser):
         attribute cannot vary by role, and sqladmin calls this per request."""
         return roles.can_add(request.session.get(ROLE_KEY), self.model.__name__)
 
+    async def check_can_edit(self, request: Request, model) -> bool:
+        return roles.can_change(request.session.get(ROLE_KEY), self.model.__name__)
+
     async def on_model_change(
         self, data: dict, model, is_created: bool, request: Request
     ) -> None:
-        """Normalise the email, check the role, and hash the password.
+        """Creating checks the whole form. Editing may only stop an account."""
+        role = request.session.get(ROLE_KEY)
+        if not is_created:
+            self._check_edit(data, model, role)
+            return
 
-        The form field is named for the column it writes, so what arrives here
-        is the plaintext password and it must not be stored as it stands.
-        """
-        if not roles.can_add(request.session.get(ROLE_KEY), self.model.__name__):
+        if not roles.can_add(role, self.model.__name__):
             raise HTTPException(status_code=403, detail="Your role cannot add staff.")
 
         data["email"] = (data.get("email") or "").strip().lower()
@@ -723,6 +754,39 @@ class AdminUserAdmin(RoleScopedView, model=AdminUser):
                 status_code=400,
                 detail="A staff account already exists for that email.",
             )
+
+    def _check_edit(self, data, model, role):
+        """Drop anything but the fields this role may set, then hold the line
+        that at least one superadmin is left able to sign in.
+
+        A panel that can lock everyone out of itself is a panel whose recovery
+        is a shell on the box, which is the thing this view exists to avoid.
+        """
+        allowed = roles.editable_fields(role, self.model.__name__)
+        refused = [
+            key
+            for key, value in data.items()
+            if key not in allowed and value != getattr(model, key, None)
+        ]
+        if refused:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Your role cannot change: {', '.join(sorted(refused))}.",
+            )
+        for key in list(data):
+            if key not in allowed:
+                data.pop(key)
+
+        if data.get("is_active") is False and model.role == roles.SUPERADMIN:
+            db = SessionLocal()
+            try:
+                if not _other_active_superadmins(db, model):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This is the last superadmin who can still sign in.",
+                    )
+            finally:
+                db.close()
 
 
 class JanitorView(BaseView):
