@@ -48,7 +48,7 @@ _VISIBLE = {
 _CHANGEABLE = {
     VIEWER: set(),
     SUPPORT: {"APIKey", "User", "Workspace", "Membership"},
-    SUPERADMIN: {"APIKey", "User", "Workspace", "Membership"},
+    SUPERADMIN: {"APIKey", "User", "Workspace", "Membership", "AdminUser"},
 }
 
 # Removing a row is narrower again. Support can change what someone is allowed
@@ -58,6 +58,16 @@ _REMOVABLE = {
     VIEWER: set(),
     SUPPORT: set(),
     SUPERADMIN: {"Membership"},
+}
+
+# Adding a row is narrower still, and only staff accounts can be added at all.
+# Everything else in the panel is created by someone using the product, so there
+# is nothing there for staff to make. Handing out console access decides who can
+# read every account's data, which is a superadmin's call.
+_ADDABLE = {
+    VIEWER: set(),
+    SUPPORT: set(),
+    SUPERADMIN: {"AdminUser"},
 }
 
 # What each role may set, within a model it can change at all. Restricting the
@@ -78,6 +88,10 @@ _EDITABLE_FIELDS = {
         "User": {"is_active", "tier"},
         "Workspace": {"is_active", "trashed_at"},
         "Membership": {"role"},
+        # Not the role or the email. Changing what a colleague may see is a
+        # different decision from taking their access away, and the second is
+        # the one that has to be possible without a shell on the box.
+        "AdminUser": {"is_active"},
     },
 }
 
@@ -93,6 +107,11 @@ def can_change(role, model_name):
 def editable_fields(role, model_name):
     """The fields this role may set on this model, empty when it may not."""
     return _EDITABLE_FIELDS.get(role, {}).get(model_name, set())
+
+
+def can_add(role, model_name):
+    """Whether this role may create a row of this model."""
+    return model_name in _ADDABLE.get(role, set())
 
 
 def can_remove(role, model_name):
