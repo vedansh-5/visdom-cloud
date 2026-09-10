@@ -46,17 +46,35 @@ class StaffAuditBackend(DBAuditBackend):
         )
 
 
+# Fields whose value must never reach the trail. The staff creation form writes
+# the password through a field named for the column it lands in, so the value
+# arriving here is the plaintext one. A record of who added an account is worth
+# keeping; a record of the password they chose is a second place to steal it
+# from, and one that outlives the account.
+_SECRET_FIELDS = ("password", "password_hash", "hashed_key", "token", "secret")
+
+_REDACTED = "[redacted]"
+
+
+def _is_secret(key):
+    return any(marker in key.lower() for marker in _SECRET_FIELDS)
+
+
 def _serialisable(changes):
     """Coerce submitted values into something the JSON column will take.
 
     Form values arrive as whatever the field produced, including UUIDs, dates
-    and model instances, none of which the driver can encode.
+    and model instances, none of which the driver can encode. Secrets are
+    replaced rather than encoded, so the trail says a password was set without
+    saying what it was.
     """
     if not changes:
         return None
     clean = {}
     for key, value in changes.items():
-        if isinstance(value, (str, int, float, bool)) or value is None:
+        if _is_secret(key):
+            clean[key] = _REDACTED
+        elif isinstance(value, (str, int, float, bool)) or value is None:
             clean[key] = value
         else:
             clean[key] = str(value)

@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
+import wtforms
 from sqladmin import Admin, BaseView, ModelView, expose
 from sqladmin.authentication import AuthenticationBackend
 from sqlalchemy.orm import joinedload
@@ -37,7 +38,7 @@ from app.models import (
     WorkspaceInvite,
     utcnow,
 )
-from app.security import verify_password
+from app.security import get_password_hash, verify_password
 
 SESSION_KEY = "admin_user"
 ROLE_KEY = "admin_role"
@@ -638,12 +639,24 @@ class SharedLinkAdmin(RoleScopedView, model=SharedLink):
     column_details_exclude_list = [SharedLink.password_hash]
 
 
+MIN_STAFF_PASSWORD = 12
+
+
 class AdminUserAdmin(RoleScopedView, model=AdminUser):
+    """Staff accounts, and the one thing in the panel staff may create.
+
+    Until now the only way to add a colleague was to open a shell on the box
+    that serves production and run `app.admin.bootstrap`. Granting someone a
+    read only console role therefore meant granting them the machine first,
+    which is a far larger thing than the role being handed over.
+    """
+
     name = "Staff account"
     name_plural = "Staff accounts"
     icon = "fa-solid fa-user-shield"
     category = "People"
     category_icon = "fa-solid fa-users"
+    can_create = True
     column_list = [
         AdminUser.email,
         AdminUser.role,
@@ -652,6 +665,64 @@ class AdminUserAdmin(RoleScopedView, model=AdminUser):
         AdminUser.last_login_at,
     ]
     column_details_exclude_list = [AdminUser.password_hash]
+    form_columns = [AdminUser.email, AdminUser.role, AdminUser.password_hash]
+    form_overrides = {"role": wtforms.SelectField, "password_hash": wtforms.PasswordField}
+    form_args = {
+        "email": {"validators": [wtforms.validators.Email()]},
+        "role": {"choices": [(name, name) for name in roles.ROLES]},
+        "password_hash": {
+            "label": "Password",
+            "description": f"At least {MIN_STAFF_PASSWORD} characters. Shown to nobody after this.",
+            "validators": [wtforms.validators.Length(min=MIN_STAFF_PASSWORD)],
+        },
+    }
+
+    async def check_can_create(self, request: Request) -> bool:
+        """The real gate, for the same reason `check_can_edit` is one: the class
+        attribute cannot vary by role, and sqladmin calls this per request."""
+        return roles.can_add(request.session.get(ROLE_KEY), self.model.__name__)
+
+    async def on_model_change(
+        self, data: dict, model, is_created: bool, request: Request
+    ) -> None:
+        """Normalise the email, check the role, and hash the password.
+
+        The form field is named for the column it writes, so what arrives here
+        is the plaintext password and it must not be stored as it stands.
+        """
+        if not roles.can_add(request.session.get(ROLE_KEY), self.model.__name__):
+            raise HTTPException(status_code=403, detail="Your role cannot add staff.")
+
+        data["email"] = (data.get("email") or "").strip().lower()
+        if not data["email"]:
+            raise HTTPException(status_code=400, detail="An email is required.")
+
+        if data.get("role") not in roles.ROLES:
+            raise HTTPException(
+                status_code=400,
+                detail="Role must be one of: %s." % ", ".join(roles.ROLES),
+            )
+
+        password = data.get("password_hash") or ""
+        if len(password) < MIN_STAFF_PASSWORD:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The password must be at least {MIN_STAFF_PASSWORD} characters.",
+            )
+        data["password_hash"] = get_password_hash(password)
+
+        db = SessionLocal()
+        try:
+            taken = (
+                db.query(AdminUser).filter(AdminUser.email == data["email"]).first()
+            )
+        finally:
+            db.close()
+        if taken is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="A staff account already exists for that email.",
+            )
 
 
 class JanitorView(BaseView):

@@ -287,3 +287,108 @@ def test_suspending_a_workspace_through_the_form_actually_saves(admin_client):
 
     admin_client.staff_db.expire_all()
     assert admin_client.staff_db.get(Workspace, workspace.id).is_active is False
+
+
+def _staff_form(email, role="support", password="a-long-enough-password"):
+    return {"email": email, "role": role, "password_hash": password}
+
+
+def test_a_superadmin_can_add_a_staff_account(admin_client):
+    """The reason this exists: adding a colleague without a shell on the box."""
+    from app.models import AdminUser
+
+    made = admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("new-colleague@example.com"),
+        follow_redirects=False,
+    )
+    assert made.status_code in (302, 303), made.text
+
+    admin_client.staff_db.expire_all()
+    added = (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.email == "new-colleague@example.com")
+        .first()
+    )
+    assert added is not None
+    assert added.role == "support"
+
+
+def test_the_password_is_stored_hashed_and_works(admin_client):
+    """A stored plaintext password would be readable by anyone with the panel."""
+    from app.models import AdminUser
+    from app.security import verify_password
+
+    admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("hashed@example.com", password="correct-horse-battery"),
+        follow_redirects=False,
+    )
+
+    admin_client.staff_db.expire_all()
+    added = (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.email == "hashed@example.com")
+        .first()
+    )
+    assert added is not None
+    assert added.password_hash != "correct-horse-battery"
+    assert verify_password("correct-horse-battery", added.password_hash)
+
+
+def test_a_short_password_is_refused(admin_client):
+    """Twelve characters, the same floor the bootstrap script enforces."""
+    from app.models import AdminUser
+
+    refused = admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("tooshort@example.com", password="short"),
+        follow_redirects=False,
+    )
+    assert refused.status_code not in (302, 303)
+
+    admin_client.staff_db.expire_all()
+    assert (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.email == "tooshort@example.com")
+        .first()
+        is None
+    )
+
+
+def test_an_unknown_role_is_refused(admin_client):
+    """The role decides what the account can read, so it is not free text."""
+    from app.models import AdminUser
+
+    refused = admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("badrole@example.com", role="root"),
+        follow_redirects=False,
+    )
+    assert refused.status_code not in (302, 303)
+
+    admin_client.staff_db.expire_all()
+    assert (
+        admin_client.staff_db.query(AdminUser)
+        .filter(AdminUser.email == "badrole@example.com")
+        .first()
+        is None
+    )
+
+
+def test_the_audit_trail_does_not_keep_the_password(admin_client):
+    """Recording who added an account is useful. Recording the password they
+    chose is a second place to steal it from, and it outlives the account."""
+    from app.models import AdminAction
+
+    admin_client.post(
+        "/admin/admin-user/create",
+        data=_staff_form("audited@example.com", password="a-memorable-secret"),
+        follow_redirects=False,
+    )
+
+    admin_client.staff_db.expire_all()
+    rows = admin_client.staff_db.query(AdminAction).all()
+    assert rows, "the creation should have been recorded at all"
+    for row in rows:
+        assert "a-memorable-secret" not in str(row.changes)

@@ -60,6 +60,16 @@ _REMOVABLE = {
     SUPERADMIN: {"Membership"},
 }
 
+# Adding a row is narrower still, and only staff accounts can be added at all.
+# Everything else in the panel is created by someone using the product, so there
+# is nothing there for staff to make. Handing out console access decides who can
+# read every account's data, which is a superadmin's call.
+_ADDABLE = {
+    VIEWER: set(),
+    SUPPORT: set(),
+    SUPERADMIN: {"AdminUser"},
+}
+
 # What each role may set, within a model it can change at all. Restricting the
 # form is what keeps "suspend an account" from also being "edit an account".
 # Suspending a workspace is reversible and leaves everything on disk, so it sits
@@ -93,6 +103,11 @@ def can_change(role, model_name):
 def editable_fields(role, model_name):
     """The fields this role may set on this model, empty when it may not."""
     return _EDITABLE_FIELDS.get(role, {}).get(model_name, set())
+
+
+def can_add(role, model_name):
+    """Whether this role may create a row of this model."""
+    return model_name in _ADDABLE.get(role, set())
 
 
 def can_remove(role, model_name):
